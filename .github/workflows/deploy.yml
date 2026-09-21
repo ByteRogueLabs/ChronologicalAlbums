@@ -36,7 +36,11 @@ jobs:
         env:
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
-        run: $env:GHCR_TOKEN | docker login ghcr.io -u "$env:GHCR_USERNAME" --password-stdin
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:GHCR_USERNAME) -or [string]::IsNullOrWhiteSpace($env:GHCR_TOKEN)) {
+            throw "GHCR_USERNAME and GHCR_TOKEN secrets must be configured for deployment."
+          }
+          $env:GHCR_TOKEN | docker login ghcr.io -u "$env:GHCR_USERNAME" --password-stdin
 
       - name: Pull image
         shell: pwsh
@@ -97,7 +101,15 @@ jobs:
       packages: read
     steps:
       - name: Log in to GHCR
-        run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
+        env:
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          if [ -z "$GHCR_USERNAME" ] || [ -z "$GHCR_TOKEN" ]; then
+            echo "GHCR_USERNAME and GHCR_TOKEN secrets must be configured for deployment." >&2
+            exit 1
+          fi
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
 
       - name: Pull image
         run: docker pull "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
@@ -126,9 +138,16 @@ jobs:
               docker rm -f "${{ env.CONTAINER_NAME }}" || true
               docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}" || true
               if [ "$had_existing_container" -eq 1 ] && [ -n "$previous_image" ]; then
-                docker run -d --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "$previous_image"
-                sleep 5
-                curl --fail --silent http://127.0.0.1:8080 >/dev/null
+                if docker run -d --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "$previous_image"; then
+                  sleep 5
+                  if ! curl --fail --silent http://127.0.0.1:8080 >/dev/null; then
+                    echo "Rollback container failed health check." >&2
+                    exit 1
+                  fi
+                else
+                  echo "Rollback container failed to start." >&2
+                  exit 1
+                fi
               fi
               exit 1
             fi
@@ -136,9 +155,16 @@ jobs:
             docker rm -f "${{ env.CONTAINER_NAME }}" || true
             docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}" || true
             if [ "$had_existing_container" -eq 1 ] && [ -n "$previous_image" ]; then
-              docker run -d --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "$previous_image"
-              sleep 5
-              curl --fail --silent http://127.0.0.1:8080 >/dev/null
+              if docker run -d --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "$previous_image"; then
+                sleep 5
+                if ! curl --fail --silent http://127.0.0.1:8080 >/dev/null; then
+                  echo "Rollback container failed health check." >&2
+                  exit 1
+                fi
+              else
+                echo "Rollback container failed to start." >&2
+                exit 1
+              fi
             fi
             exit 1
           fi
