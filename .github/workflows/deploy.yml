@@ -31,6 +31,13 @@ jobs:
       contents: read
       packages: read
     steps:
+      - name: Validate runner tools
+        shell: pwsh
+        run: |
+          if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+            throw "Docker must be installed and available on PATH for deployment."
+          }
+
       - name: Log in to GHCR
         shell: pwsh
         env:
@@ -66,7 +73,7 @@ jobs:
           docker container inspect "${{ env.CONTAINER_NAME }}" *> $null
           if ($LASTEXITCODE -eq 0) {
             $existingContainer = $true
-            $previousImage = docker container inspect -f "{{.Config.Image}}" "${{ env.CONTAINER_NAME }}"
+            $previousImage = docker container inspect -f "{{.Image}}" "${{ env.CONTAINER_NAME }}"
             docker rm -f "${{ env.CONTAINER_NAME }}"
           }
           try {
@@ -100,6 +107,17 @@ jobs:
       contents: read
       packages: read
     steps:
+      - name: Validate runner tools
+        run: |
+          if ! command -v docker >/dev/null 2>&1; then
+            echo "Docker must be installed and available on PATH for deployment." >&2
+            exit 1
+          fi
+          if ! command -v curl >/dev/null 2>&1; then
+            echo "curl must be installed and available on PATH for deployment." >&2
+            exit 1
+          fi
+
       - name: Log in to GHCR
         env:
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
@@ -127,7 +145,7 @@ jobs:
           fi
           if docker container inspect "${{ env.CONTAINER_NAME }}" >/dev/null 2>&1; then
             had_existing_container=1
-            previous_image="$(docker container inspect -f '{{.Config.Image}}' "${{ env.CONTAINER_NAME }}")"
+            previous_image="$(docker container inspect -f '{{.Image}}' "${{ env.CONTAINER_NAME }}")"
             docker rm -f "${{ env.CONTAINER_NAME }}"
           fi
           if docker run -d --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"; then

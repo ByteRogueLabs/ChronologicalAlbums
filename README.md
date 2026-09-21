@@ -41,5 +41,12 @@ workflow:
 - `GHCR_USERNAME`
 - `GHCR_TOKEN` with `packages:read`
 
+### Self-hosted runner prerequisites
+
+- Docker installed and available on `PATH` for both Windows and Raspberry Pi
+  runners
+- `curl` installed and available on `PATH` for Raspberry Pi runners
+- Windows runners configured to run Linux containers
+
 The Windows deployment workflow assumes the runner's Docker engine is configured
 to run Linux containers.
