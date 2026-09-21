@@ -57,10 +57,14 @@ jobs:
         shell: pwsh
         run: |
           $existingContainer = $false
+          $deploymentImage = docker image inspect -f "{{index .RepoDigests 0}}" "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+          if ([string]::IsNullOrWhiteSpace($deploymentImage)) {
+            throw "Failed to resolve an immutable image digest for deployment."
+          }
           $previousImage = ""
           docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}" 2>$null
           try {
-            docker run -d --name "${{ env.CANDIDATE_CONTAINER_NAME }}" -p 18081:8080 "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+            docker run -d --label chronologicalalbums.image-ref="$deploymentImage" --name "${{ env.CANDIDATE_CONTAINER_NAME }}" -p 18081:8080 $deploymentImage
             if ($LASTEXITCODE -ne 0) { throw "Failed to start candidate container." }
             Start-Sleep -Seconds 5
             $response = Invoke-WebRequest -Uri "http://127.0.0.1:18081" -UseBasicParsing
@@ -73,11 +77,19 @@ jobs:
           docker container inspect "${{ env.CONTAINER_NAME }}" *> $null
           if ($LASTEXITCODE -eq 0) {
             $existingContainer = $true
-            $previousImage = docker container inspect -f "{{.Image}}" "${{ env.CONTAINER_NAME }}"
+            $previousImage = docker container inspect -f "{{ index .Config.Labels \"chronologicalalbums.image-ref\" }}" "${{ env.CONTAINER_NAME }}"
+            if ([string]::IsNullOrWhiteSpace($previousImage)) {
+              $currentImageId = docker container inspect -f "{{.Image}}" "${{ env.CONTAINER_NAME }}"
+              $previousImage = docker image inspect -f "{{index .RepoDigests 0}}" $currentImageId
+            }
+            if ([string]::IsNullOrWhiteSpace($previousImage)) {
+              docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}" 2>$null
+              throw "Existing container does not expose an immutable image reference for rollback."
+            }
             docker rm -f "${{ env.CONTAINER_NAME }}"
           }
           try {
-            docker run -d --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+            docker run -d --label chronologicalalbums.image-ref="$deploymentImage" --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 $deploymentImage
             if ($LASTEXITCODE -ne 0) { throw "Failed to start replacement container." }
             Start-Sleep -Seconds 5
             $response = Invoke-WebRequest -Uri "http://127.0.0.1:8080" -UseBasicParsing
@@ -88,7 +100,7 @@ jobs:
             docker rm -f "${{ env.CONTAINER_NAME }}" 2>$null
             docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}" 2>$null
             if ($existingContainer -and $previousImage) {
-              docker run -d --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 $previousImage
+              docker run -d --label chronologicalalbums.image-ref="$previousImage" --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 $previousImage
               if ($LASTEXITCODE -ne 0) { throw "Rollback container failed to start." }
               Start-Sleep -Seconds 5
               $rollbackResponse = Invoke-WebRequest -Uri "http://127.0.0.1:8080" -UseBasicParsing
@@ -136,8 +148,13 @@ jobs:
         run: |
           had_existing_container=0
           previous_image=""
+          deployment_image="$(docker image inspect -f '{{index .RepoDigests 0}}' "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}")"
+          if [ -z "$deployment_image" ]; then
+            echo "Failed to resolve an immutable image digest for deployment." >&2
+            exit 1
+          fi
           docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}" || true
-          docker run -d --name "${{ env.CANDIDATE_CONTAINER_NAME }}" -p 18081:8080 "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+          docker run -d --label chronologicalalbums.image-ref="$deployment_image" --name "${{ env.CANDIDATE_CONTAINER_NAME }}" -p 18081:8080 "$deployment_image"
           sleep 5
           if ! curl --fail --silent http://127.0.0.1:18081 >/dev/null; then
             docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}" || true
@@ -145,10 +162,19 @@ jobs:
           fi
           if docker container inspect "${{ env.CONTAINER_NAME }}" >/dev/null 2>&1; then
             had_existing_container=1
-            previous_image="$(docker container inspect -f '{{.Image}}' "${{ env.CONTAINER_NAME }}")"
+            previous_image="$(docker container inspect -f '{{ index .Config.Labels "chronologicalalbums.image-ref" }}' "${{ env.CONTAINER_NAME }}")"
+            if [ -z "$previous_image" ]; then
+              current_image_id="$(docker container inspect -f '{{.Image}}' "${{ env.CONTAINER_NAME }}")"
+              previous_image="$(docker image inspect -f '{{index .RepoDigests 0}}' "$current_image_id")"
+            fi
+            if [ -z "$previous_image" ]; then
+              docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}" || true
+              echo "Existing container does not expose an immutable image reference for rollback." >&2
+              exit 1
+            fi
             docker rm -f "${{ env.CONTAINER_NAME }}"
           fi
-          if docker run -d --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"; then
+          if docker run -d --label chronologicalalbums.image-ref="$deployment_image" --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "$deployment_image"; then
             sleep 5
             if curl --fail --silent http://127.0.0.1:8080 >/dev/null; then
               docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}"
@@ -156,7 +182,7 @@ jobs:
               docker rm -f "${{ env.CONTAINER_NAME }}" || true
               docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}" || true
               if [ "$had_existing_container" -eq 1 ] && [ -n "$previous_image" ]; then
-                if docker run -d --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "$previous_image"; then
+                if docker run -d --label chronologicalalbums.image-ref="$previous_image" --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "$previous_image"; then
                   sleep 5
                   if ! curl --fail --silent http://127.0.0.1:8080 >/dev/null; then
                     echo "Rollback container failed health check." >&2
@@ -173,7 +199,7 @@ jobs:
             docker rm -f "${{ env.CONTAINER_NAME }}" || true
             docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}" || true
             if [ "$had_existing_container" -eq 1 ] && [ -n "$previous_image" ]; then
-              if docker run -d --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "$previous_image"; then
+              if docker run -d --label chronologicalalbums.image-ref="$previous_image" --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "$previous_image"; then
                 sleep 5
                 if ! curl --fail --silent http://127.0.0.1:8080 >/dev/null; then
                   echo "Rollback container failed health check." >&2

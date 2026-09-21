@@ -26,7 +26,8 @@ docker run --rm -p 8080:8080 chronologicalalbums
 
 - `.github/workflows/docker-image.yml` builds the image and pushes it to GHCR on
   non-PR runs.
-- `.github/workflows/deploy.yml` deploys the image to a self-hosted runner.
+- `.github/workflows/deploy.yml` deploys the image to self-hosted Windows or
+  Raspberry Pi runners.
 
 ### Expected self-hosted runner labels
 
