@@ -20,6 +20,7 @@ env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/chronologicalalbums
   CONTAINER_NAME: chronologicalalbums
   CANDIDATE_CONTAINER_NAME: chronologicalalbums-candidate
+  BACKUP_CONTAINER_NAME: chronologicalalbums-backup
 
 jobs:
   deploy-windows:
@@ -45,14 +46,36 @@ jobs:
       - name: Replace container
         shell: pwsh
         run: |
+          $existingContainer = $false
           docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}" 2>$null
+          docker rm -f "${{ env.BACKUP_CONTAINER_NAME }}" 2>$null
           docker run -d --name "${{ env.CANDIDATE_CONTAINER_NAME }}" -p 18081:8080 "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
           Start-Sleep -Seconds 5
           $response = Invoke-WebRequest -Uri "http://127.0.0.1:18081" -UseBasicParsing
           if ($response.StatusCode -ne 200) { throw "Candidate container did not return HTTP 200." }
-          docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}"
-          docker rm -f "${{ env.CONTAINER_NAME }}" 2>$null
-          docker run -d --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+          docker container inspect "${{ env.CONTAINER_NAME }}" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            $existingContainer = $true
+            docker rename "${{ env.CONTAINER_NAME }}" "${{ env.BACKUP_CONTAINER_NAME }}"
+            docker stop "${{ env.BACKUP_CONTAINER_NAME }}"
+          }
+          try {
+            docker run -d --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+            if ($LASTEXITCODE -ne 0) { throw "Failed to start replacement container." }
+            docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}"
+            if ($existingContainer) {
+              docker rm -f "${{ env.BACKUP_CONTAINER_NAME }}"
+            }
+          }
+          catch {
+            docker rm -f "${{ env.CONTAINER_NAME }}" 2>$null
+            docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}" 2>$null
+            if ($existingContainer) {
+              docker start "${{ env.BACKUP_CONTAINER_NAME }}"
+              docker rename "${{ env.BACKUP_CONTAINER_NAME }}" "${{ env.CONTAINER_NAME }}"
+            }
+            throw
+          }
 
   deploy-raspberry-pi:
     if: inputs.target == 'raspberry-pi'
@@ -72,10 +95,28 @@ jobs:
 
       - name: Replace container
         run: |
+          had_existing_container=0
           docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}" || true
+          docker rm -f "${{ env.BACKUP_CONTAINER_NAME }}" || true
           docker run -d --name "${{ env.CANDIDATE_CONTAINER_NAME }}" -p 18081:8080 "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
           sleep 5
           curl --fail --silent http://127.0.0.1:18081 >/dev/null
-          docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}"
-          docker rm -f "${{ env.CONTAINER_NAME }}" || true
-          docker run -d --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+          if docker container inspect "${{ env.CONTAINER_NAME }}" >/dev/null 2>&1; then
+            had_existing_container=1
+            docker rename "${{ env.CONTAINER_NAME }}" "${{ env.BACKUP_CONTAINER_NAME }}"
+            docker stop "${{ env.BACKUP_CONTAINER_NAME }}"
+          fi
+          if docker run -d --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"; then
+            docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}"
+            if [ "$had_existing_container" -eq 1 ]; then
+              docker rm -f "${{ env.BACKUP_CONTAINER_NAME }}"
+            fi
+          else
+            docker rm -f "${{ env.CONTAINER_NAME }}" || true
+            docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}" || true
+            if [ "$had_existing_container" -eq 1 ]; then
+              docker start "${{ env.BACKUP_CONTAINER_NAME }}"
+              docker rename "${{ env.BACKUP_CONTAINER_NAME }}" "${{ env.CONTAINER_NAME }}"
+            fi
+            exit 1
+          fi
