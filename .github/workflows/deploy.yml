@@ -71,6 +71,10 @@ jobs:
             docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}" 2>$null
             if ($existingContainer -and $previousImage) {
               docker run -d --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 $previousImage
+              if ($LASTEXITCODE -ne 0) { throw "Rollback container failed to start." }
+              Start-Sleep -Seconds 5
+              $rollbackResponse = Invoke-WebRequest -Uri "http://127.0.0.1:8080" -UseBasicParsing
+              if ($rollbackResponse.StatusCode -ne 200) { throw "Rollback container did not return HTTP 200." }
             }
             throw
           }
@@ -113,6 +117,8 @@ jobs:
               docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}" || true
               if [ "$had_existing_container" -eq 1 ] && [ -n "$previous_image" ]; then
                 docker run -d --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "$previous_image"
+                sleep 5
+                curl --fail --silent http://127.0.0.1:8080 >/dev/null
               fi
               exit 1
             fi
@@ -121,6 +127,8 @@ jobs:
             docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}" || true
             if [ "$had_existing_container" -eq 1 ] && [ -n "$previous_image" ]; then
               docker run -d --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "$previous_image"
+              sleep 5
+              curl --fail --silent http://127.0.0.1:8080 >/dev/null
             fi
             exit 1
           fi
