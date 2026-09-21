@@ -62,6 +62,9 @@ jobs:
           try {
             docker run -d --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
             if ($LASTEXITCODE -ne 0) { throw "Failed to start replacement container." }
+            Start-Sleep -Seconds 5
+            $response = Invoke-WebRequest -Uri "http://127.0.0.1:8080" -UseBasicParsing
+            if ($response.StatusCode -ne 200) { throw "Replacement container did not return HTTP 200." }
             docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}"
             if ($existingContainer) {
               docker rm -f "${{ env.BACKUP_CONTAINER_NAME }}"
@@ -107,9 +110,20 @@ jobs:
             docker stop "${{ env.BACKUP_CONTAINER_NAME }}"
           fi
           if docker run -d --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"; then
-            docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}"
-            if [ "$had_existing_container" -eq 1 ]; then
-              docker rm -f "${{ env.BACKUP_CONTAINER_NAME }}"
+            sleep 5
+            if curl --fail --silent http://127.0.0.1:8080 >/dev/null; then
+              docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}"
+              if [ "$had_existing_container" -eq 1 ]; then
+                docker rm -f "${{ env.BACKUP_CONTAINER_NAME }}"
+              fi
+            else
+              docker rm -f "${{ env.CONTAINER_NAME }}" || true
+              docker rm -f "${{ env.CANDIDATE_CONTAINER_NAME }}" || true
+              if [ "$had_existing_container" -eq 1 ]; then
+                docker start "${{ env.BACKUP_CONTAINER_NAME }}"
+                docker rename "${{ env.BACKUP_CONTAINER_NAME }}" "${{ env.CONTAINER_NAME }}"
+              fi
+              exit 1
             fi
           else
             docker rm -f "${{ env.CONTAINER_NAME }}" || true
