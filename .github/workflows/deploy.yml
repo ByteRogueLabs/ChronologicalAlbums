@@ -1,0 +1,68 @@
+name: Deploy container
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Deployment target
+        required: true
+        type: choice
+        options:
+          - windows
+          - raspberry-pi
+      image_tag:
+        description: Image tag to deploy
+        required: true
+        default: latest
+        type: string
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/chronologicalalbums
+  CONTAINER_NAME: chronologicalalbums
+
+jobs:
+  deploy-windows:
+    if: inputs.target == 'windows'
+    runs-on:
+      - self-hosted
+      - windows
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Log in to GHCR
+        shell: pwsh
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: $env:GHCR_TOKEN | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Pull image
+        shell: pwsh
+        run: docker pull "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+
+      - name: Replace container
+        shell: pwsh
+        run: |
+          docker rm -f "${{ env.CONTAINER_NAME }}" 2>$null
+          docker run -d --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+
+  deploy-raspberry-pi:
+    if: inputs.target == 'raspberry-pi'
+    runs-on:
+      - self-hosted
+      - linux
+      - raspberry-pi
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Pull image
+        run: docker pull "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
+
+      - name: Replace container
+        run: |
+          docker rm -f "${{ env.CONTAINER_NAME }}" || true
+          docker run -d --name "${{ env.CONTAINER_NAME }}" -p 8080:8080 "${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
