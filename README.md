@@ -33,5 +33,13 @@ docker run --rm -p 8080:8080 chronologicalalbums
 - Windows host: `self-hosted`, `windows`
 - Raspberry Pi host: `self-hosted`, `linux`, `raspberry-pi`
 
+### Required deployment secrets
+
+Configure the following repository or organization secrets for the deploy
+workflow:
+
+- `GHCR_USERNAME`
+- `GHCR_TOKEN` with `packages:read`
+
 The Windows deployment workflow assumes the runner's Docker engine is configured
 to run Linux containers.
