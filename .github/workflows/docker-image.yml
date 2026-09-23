@@ -150,7 +150,19 @@ jobs:
             previous_image="$(docker container inspect -f '{{ index .Config.Labels "chronologicalalbums.image-ref" }}' chronologicalalbums)"
             if [ -z "$previous_image" ]; then
               current_image_id="$(docker container inspect -f '{{.Image}}' chronologicalalbums)"
-              previous_image="$(docker image inspect -f '{{.Id}}' "$current_image_id" 2>/dev/null || true)"
+              previous_image="$(
+                docker image inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' "$current_image_id" 2>/dev/null \
+                  | grep -F "${{ env.IMAGE_NAME }}@" \
+                  | head -n 1
+              )"
+              if [ -z "$previous_image" ]; then
+                previous_image="$(
+                  docker image inspect -f '{{range .RepoTags}}{{println .}}{{end}}' "$current_image_id" 2>/dev/null \
+                    | grep -F "${{ env.IMAGE_NAME }}:" \
+                    | grep -E ':[0-9a-f]{40}$' \
+                    | head -n 1
+                )"
+              fi
             fi
             if [ -n "$previous_image" ] && ! docker image inspect "$previous_image" >/dev/null 2>&1; then
               previous_image=""
