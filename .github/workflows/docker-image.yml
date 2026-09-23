@@ -117,6 +117,21 @@ jobs:
             done
             return 1
           }
+          rollback_container() {
+            docker rm -f chronologicalalbums || true
+            docker rm -f chronologicalalbums-candidate || true
+            if [ "$had_existing_container" -eq 1 ] && [ -n "$previous_image" ]; then
+              if docker run -d --label chronologicalalbums.image-ref="$previous_image" --name chronologicalalbums -p 8080:8080 "$previous_image"; then
+                if ! wait_for_healthy 8080; then
+                  echo "Rollback container failed health check." >&2
+                  exit 1
+                fi
+              else
+                echo "Rollback container failed to start." >&2
+                exit 1
+              fi
+            fi
+          }
           had_existing_container=0
           previous_image=""
           deployment_image="$(docker image inspect -f '{{.Id}}' "${{ env.IMAGE_NAME }}:${{ github.sha }}")"
@@ -147,35 +162,10 @@ jobs:
             if wait_for_healthy 8080; then
               docker rm -f chronologicalalbums-candidate
             else
-              docker rm -f chronologicalalbums || true
-              docker rm -f chronologicalalbums-candidate || true
-              if [ "$had_existing_container" -eq 1 ] && [ -n "$previous_image" ]; then
-                if docker run -d --label chronologicalalbums.image-ref="$previous_image" --name chronologicalalbums -p 8080:8080 "$previous_image"; then
-                  if ! wait_for_healthy 8080; then
-                    echo "Rollback container failed health check." >&2
-                    exit 1
-                  fi
-                else
-                  echo "Rollback container failed to start." >&2
-                  exit 1
-                fi
-              fi
+              rollback_container
               exit 1
             fi
           else
-            docker rm -f chronologicalalbums || true
-            docker rm -f chronologicalalbums-candidate || true
-            if [ "$had_existing_container" -eq 1 ] && [ -n "$previous_image" ]; then
-              if docker run -d --label chronologicalalbums.image-ref="$previous_image" --name chronologicalalbums -p 8080:8080 "$previous_image"; then
-                sleep 5
-                if ! curl --fail --silent http://127.0.0.1:8080 >/dev/null; then
-                  echo "Rollback container failed health check." >&2
-                  exit 1
-                fi
-              else
-                echo "Rollback container failed to start." >&2
-                exit 1
-              fi
-            fi
+            rollback_container
             exit 1
           fi
