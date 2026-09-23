@@ -134,9 +134,9 @@ jobs:
           }
           had_existing_container=0
           previous_image=""
-          deployment_image="$(docker image inspect -f '{{.Id}}' "${{ env.IMAGE_NAME }}:${{ github.sha }}")"
-          if [ -z "$deployment_image" ]; then
-            echo "Failed to resolve the image identifier for deployment." >&2
+          deployment_image="${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          if ! docker image inspect "$deployment_image" >/dev/null 2>&1; then
+            echo "Failed to resolve the deployment image for $deployment_image." >&2
             exit 1
           fi
           docker rm -f chronologicalalbums-candidate || true
@@ -149,8 +149,13 @@ jobs:
             had_existing_container=1
             previous_image="$(docker container inspect -f '{{ index .Config.Labels "chronologicalalbums.image-ref" }}' chronologicalalbums)"
             if [ -z "$previous_image" ]; then
-              current_image_id="$(docker container inspect -f '{{.Image}}' chronologicalalbums)"
-              previous_image="$(docker image inspect -f '{{.Id}}' "$current_image_id" 2>/dev/null || true)"
+              previous_image="$(docker container inspect -f '{{.Config.Image}}' chronologicalalbums)"
+              if ! printf '%s\n' "$previous_image" | grep -Eq '@sha256:[0-9a-f]{64}$|:[0-9a-f]{40}$'; then
+                previous_image=""
+              fi
+            fi
+            if [ -n "$previous_image" ] && ! docker image inspect "$previous_image" >/dev/null 2>&1; then
+              previous_image=""
             fi
             if [ -z "$previous_image" ]; then
               docker rm -f chronologicalalbums-candidate || true
