@@ -113,8 +113,7 @@ jobs:
     if: inputs.target == 'raspberry-pi'
     runs-on:
       - self-hosted
-      - linux
-      - raspberry-pi
+      - CPLGitHub
     permissions:
       contents: read
       packages: read

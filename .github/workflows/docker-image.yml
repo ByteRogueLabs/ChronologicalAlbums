@@ -43,6 +43,7 @@ jobs:
           images: ${{ env.IMAGE_NAME }}
           tags: |
             type=sha
+            type=raw,value=${{ github.sha }}
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build image for pull requests
@@ -66,3 +67,107 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  deploy-raspberry-pi:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on:
+      - self-hosted
+      - CPLGitHub
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Validate runner tools
+        run: |
+          if ! command -v docker >/dev/null 2>&1; then
+            echo "Docker must be installed and available on PATH for deployment." >&2
+            exit 1
+          fi
+          if ! command -v curl >/dev/null 2>&1; then
+            echo "curl must be installed and available on PATH for deployment." >&2
+            exit 1
+          fi
+
+      - name: Log in to GHCR
+        env:
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          if [ -z "$GHCR_USERNAME" ] || [ -z "$GHCR_TOKEN" ]; then
+            echo "GHCR_USERNAME and GHCR_TOKEN secrets must be configured for deployment." >&2
+            exit 1
+          fi
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+
+      - name: Pull image
+        run: docker pull "${{ env.IMAGE_NAME }}:${{ github.sha }}"
+
+      - name: Replace container
+        run: |
+          had_existing_container=0
+          previous_image=""
+          deployment_image="$(docker image inspect -f '{{index .RepoDigests 0}}' "${{ env.IMAGE_NAME }}:${{ github.sha }}")"
+          if [ -z "$deployment_image" ]; then
+            echo "Failed to resolve an immutable image digest for deployment." >&2
+            exit 1
+          fi
+          docker rm -f chronologicalalbums-candidate || true
+          docker run -d --label chronologicalalbums.image-ref="$deployment_image" --name chronologicalalbums-candidate -p 18081:8080 "$deployment_image"
+          sleep 5
+          if ! curl --fail --silent http://127.0.0.1:18081 >/dev/null; then
+            docker rm -f chronologicalalbums-candidate || true
+            exit 1
+          fi
+          if docker container inspect chronologicalalbums >/dev/null 2>&1; then
+            had_existing_container=1
+            previous_image="$(docker container inspect -f '{{ index .Config.Labels "chronologicalalbums.image-ref" }}' chronologicalalbums)"
+            if [ -z "$previous_image" ]; then
+              current_image_id="$(docker container inspect -f '{{.Image}}' chronologicalalbums)"
+              previous_image="$(docker image inspect -f '{{index .RepoDigests 0}}' "$current_image_id")"
+            fi
+            if [ -z "$previous_image" ]; then
+              docker rm -f chronologicalalbums-candidate || true
+              echo "Existing container does not expose an immutable image reference for rollback." >&2
+              exit 1
+            fi
+            docker rm -f chronologicalalbums
+          fi
+          if docker run -d --label chronologicalalbums.image-ref="$deployment_image" --name chronologicalalbums -p 8080:8080 "$deployment_image"; then
+            sleep 5
+            if curl --fail --silent http://127.0.0.1:8080 >/dev/null; then
+              docker rm -f chronologicalalbums-candidate
+            else
+              docker rm -f chronologicalalbums || true
+              docker rm -f chronologicalalbums-candidate || true
+              if [ "$had_existing_container" -eq 1 ] && [ -n "$previous_image" ]; then
+                if docker run -d --label chronologicalalbums.image-ref="$previous_image" --name chronologicalalbums -p 8080:8080 "$previous_image"; then
+                  sleep 5
+                  if ! curl --fail --silent http://127.0.0.1:8080 >/dev/null; then
+                    echo "Rollback container failed health check." >&2
+                    exit 1
+                  fi
+                else
+                  echo "Rollback container failed to start." >&2
+                  exit 1
+                fi
+              fi
+              exit 1
+            fi
+          else
+            docker rm -f chronologicalalbums || true
+            docker rm -f chronologicalalbums-candidate || true
+            if [ "$had_existing_container" -eq 1 ] && [ -n "$previous_image" ]; then
+              if docker run -d --label chronologicalalbums.image-ref="$previous_image" --name chronologicalalbums -p 8080:8080 "$previous_image"; then
+                sleep 5
+                if ! curl --fail --silent http://127.0.0.1:8080 >/dev/null; then
+                  echo "Rollback container failed health check." >&2
+                  exit 1
+                fi
+              else
+                echo "Rollback container failed to start." >&2
+                exit 1
+              fi
+            fi
+            exit 1
+          fi
