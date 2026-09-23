@@ -149,12 +149,9 @@ jobs:
             had_existing_container=1
             previous_image="$(docker container inspect -f '{{ index .Config.Labels "chronologicalalbums.image-ref" }}' chronologicalalbums)"
             if [ -z "$previous_image" ]; then
-              previous_image="$(docker container inspect -f '{{.Config.Image}}' chronologicalalbums)"
-              if ! printf '%s\n' "$previous_image" | grep -Eq '@sha256:[0-9a-f]{64}$|:[0-9a-f]{40}$'; then
-                previous_image=""
-              fi
-            fi
-            if [ -n "$previous_image" ] && ! docker image inspect "$previous_image" >/dev/null 2>&1; then
+              current_image_id="$(docker container inspect -f '{{.Image}}' chronologicalalbums)"
+              previous_image="$(docker image inspect -f '{{.Id}}' "$current_image_id" 2>/dev/null || true)"
+            elif ! docker image inspect "$previous_image" >/dev/null 2>&1; then
               previous_image=""
             fi
             if [ -z "$previous_image" ]; then
