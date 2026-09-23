@@ -25,14 +25,15 @@ docker run --rm -p 8080:8080 chronologicalalbums
 ## GitHub Actions
 
 - `.github/workflows/docker-image.yml` builds the image and pushes it to GHCR on
-  non-PR runs.
+  non-PR runs, then deploys the exact built image to the home Raspberry Pi
+  runner.
 - `.github/workflows/deploy.yml` deploys the image to self-hosted Windows or
   Raspberry Pi runners.
 
 ### Expected self-hosted runner labels
 
 - Windows host: `self-hosted`, `windows`
-- Raspberry Pi host: `self-hosted`, `linux`, `raspberry-pi`
+- Raspberry Pi host: `self-hosted`, `CPLGitHub`
 
 ### Required deployment secrets
 
