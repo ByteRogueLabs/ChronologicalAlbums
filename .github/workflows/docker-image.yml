@@ -132,6 +132,30 @@ jobs:
               fi
             fi
           }
+          resolve_previous_image() {
+            existing_image_ref="$(docker container inspect -f '{{ index .Config.Labels "chronologicalalbums.image-ref" }}' chronologicalalbums)"
+            if [ -n "$existing_image_ref" ]; then
+              printf '%s\n' "$existing_image_ref"
+              return 0
+            fi
+            current_image_id="$(docker container inspect -f '{{.Image}}' chronologicalalbums)"
+            existing_image_ref="$(
+              docker image inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' "$current_image_id" 2>/dev/null \
+                | grep -F "${{ env.IMAGE_NAME }}@" \
+                | head -n 1
+            )"
+            if [ -z "$existing_image_ref" ]; then
+              existing_image_ref="$(
+                docker image inspect -f '{{range .RepoTags}}{{println .}}{{end}}' "$current_image_id" 2>/dev/null \
+                  | grep -F "${{ env.IMAGE_NAME }}:" \
+                  | grep -E ':[0-9a-f]{40}$' \
+                  | head -n 1
+              )"
+            fi
+            if [ -n "$existing_image_ref" ] && docker image inspect "$existing_image_ref" >/dev/null 2>&1; then
+              printf '%s\n' "$existing_image_ref"
+            fi
+          }
           had_existing_container=0
           previous_image=""
           deployment_image="${{ env.IMAGE_NAME }}:${{ github.sha }}"
@@ -147,26 +171,7 @@ jobs:
           fi
           if docker container inspect chronologicalalbums >/dev/null 2>&1; then
             had_existing_container=1
-            previous_image="$(docker container inspect -f '{{ index .Config.Labels "chronologicalalbums.image-ref" }}' chronologicalalbums)"
-            if [ -z "$previous_image" ]; then
-              current_image_id="$(docker container inspect -f '{{.Image}}' chronologicalalbums)"
-              previous_image="$(
-                docker image inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' "$current_image_id" 2>/dev/null \
-                  | grep -F "${{ env.IMAGE_NAME }}@" \
-                  | head -n 1
-              )"
-              if [ -z "$previous_image" ]; then
-                previous_image="$(
-                  docker image inspect -f '{{range .RepoTags}}{{println .}}{{end}}' "$current_image_id" 2>/dev/null \
-                    | grep -F "${{ env.IMAGE_NAME }}:" \
-                    | grep -E ':[0-9a-f]{40}$' \
-                    | head -n 1
-                )"
-              fi
-            fi
-            if [ -n "$previous_image" ] && ! docker image inspect "$previous_image" >/dev/null 2>&1; then
-              previous_image=""
-            fi
+            previous_image="$(resolve_previous_image)"
             if [ -z "$previous_image" ]; then
               docker rm -f chronologicalalbums-candidate || true
               echo "Existing container does not expose an immutable image reference for rollback." >&2
