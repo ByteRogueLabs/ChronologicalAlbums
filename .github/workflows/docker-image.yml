@@ -149,7 +149,8 @@ jobs:
             had_existing_container=1
             previous_image="$(docker container inspect -f '{{ index .Config.Labels "chronologicalalbums.image-ref" }}' chronologicalalbums)"
             if [ -z "$previous_image" ]; then
-              previous_image="$(docker container inspect -f '{{.Image}}' chronologicalalbums)"
+              current_image_id="$(docker container inspect -f '{{.Image}}' chronologicalalbums)"
+              previous_image="$(docker image inspect -f '{{.Id}}' "$current_image_id" 2>/dev/null || true)"
             fi
             if [ -z "$previous_image" ]; then
               docker rm -f chronologicalalbums-candidate || true
@@ -158,10 +159,9 @@ jobs:
             fi
             docker rm -f chronologicalalbums
           fi
+          docker rm -f chronologicalalbums-candidate
           if docker run -d --label chronologicalalbums.image-ref="$deployment_image" --name chronologicalalbums -p 8080:8080 "$deployment_image"; then
-            if wait_for_healthy 8080; then
-              docker rm -f chronologicalalbums-candidate
-            else
+            if ! wait_for_healthy 8080; then
               rollback_container
               exit 1
             fi
